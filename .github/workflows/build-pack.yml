@@ -1,0 +1,77 @@
+name: Build Package
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: "Name of the package to build"
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Docker
+      - name: Set up Docker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y docker.io
+          sudo systemctl start docker
+          sudo docker --version
+
+      # Step 3: Pull the Termux package builder image
+      - name: Pull Docker image
+        run: |
+          sudo docker pull ghcr.io/termux/package-builder:latest
+
+      # Step 4: Start the Docker container and set up Android SDK
+      - name: Set up Android SDK
+        run: |
+          sudo ./scripts/run-docker.sh ./scripts/setup-android-sdk.sh
+
+      # Step 5: Install Python 3.11
+      - name: Install Python
+        run: |
+          sudo ./scripts/run-docker.sh bash -c "
+            sudo apt-get update
+            sudo apt-get install -y software-properties-common
+            sudo add-apt-repository ppa:deadsnakes/ppa -y
+            sudo apt-get update
+            sudo apt-get install -y python3.11
+            python3.11 --version
+          "
+
+      # Step 6: Build the package and capture logs
+      - name: Build package
+        run: |
+          # Redirect build output to a log file
+          sudo ./scripts/run-docker.sh ./build-package.sh -a aarch64 ${{ github.event.inputs.package_name }} > build.log 2>&1 || true
+
+          # Check if the build failed
+          if grep -q "ERROR" build.log; then
+            echo "Build failed. Uploading logs..."
+            # Save the log file as an artifact
+            echo "build_log=build.log" >> $GITHUB_ENV
+          else
+            echo "Build succeeded."
+          fi
+
+      # Step 7: Upload build logs (if the build failed)
+      - name: Upload build logs
+        if: env.build_log
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: ${{ env.build_log }}
+
+      # Step 8: Upload built artifacts (if the build succeeded)
+      - name: Upload artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-packages
+          path: output/
